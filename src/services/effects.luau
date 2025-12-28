@@ -112,7 +112,7 @@ function effects.emit(depth: number, ...: Instance): types.EmitEnv
         current = current.Parent
       end
 
-      for inst in visited do
+      for inst in pairs(visited) do
         skipCache[inst] = skip
       end
 
@@ -150,7 +150,8 @@ function effects.emit(depth: number, ...: Instance): types.EmitEnv
 
       for i = #stack, 1, -1 do
         local child = stack[i]
-        depthCache[child] = depthCache[child.Parent] + 1
+        local parentDepth = depthCache[child.Parent] or baseDepth
+        depthCache[child] = parentDepth + 1
       end
 
       return depthCache[instance]
