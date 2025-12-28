@@ -61,51 +61,80 @@ function effects.emit(depth: number, ...: Instance): types.EmitEnv
 
   local function queryAndEmitDescendants(obj: Instance, baseDepth: number): { any }
     local allDescendants = obj:QueryDescendants(EffectSelectors)
+    local total = #allDescendants
 
-    if #allDescendants == 0 then
+    if total == 0 then
       return {}
     end
 
     local nestedEffectHandlers = {}
 
-    for _, desc in allDescendants do
+    for index = 1, total do
+      local desc = allDescendants[index]
+
       if utility.shouldSkipNested(desc) then
         nestedEffectHandlers[desc] = true
       end
     end
 
     -- filter and emit valid effects
-    local promises = {}
+    local promises = table.create(total)
+    local promiseCount = 0
+    local skipCache = { [obj] = false }
+    local depthCache = { [obj] = baseDepth }
 
-    for _, desc in allDescendants do
-      local skipThis = false
-      local parent = desc.Parent
+    local function shouldSkip(instance: Instance): boolean
+      local cached = skipCache[instance]
 
-      while parent and parent ~= obj do
-        if nestedEffectHandlers[parent] then
-          skipThis = true
-          break
-        end
-
-        parent = parent.Parent
+      if cached ~= nil then
+        return cached
       end
 
-      if not skipThis then
-        local p = desc.Parent
-        local effectDepth = baseDepth
+      local parent = instance.Parent
+      local skip = nestedEffectHandlers[instance] == true
 
-        while p and p ~= obj do
-          p = p.Parent
-          effectDepth += 1
-        end
-
-        table.insert(
-          promises,
-          utility.createEmitPromise(effects, desc, effectDepth, function(scope)
-            emitters.dispatch(desc, scope, sharedUncMap, sharedRefMap, api_ref.caches.shared_part, legacyScale)
-          end)
-        )
+      if not skip and parent and parent ~= obj then
+        skip = shouldSkip(parent)
       end
+
+      skipCache[instance] = skip
+
+      return skip
+    end
+
+    local function getDepth(instance: Instance): number
+      local cached = depthCache[instance]
+
+      if cached then
+        return cached
+      end
+
+      local parent = instance.Parent
+      local depth
+
+      if parent and parent ~= obj then
+        depth = getDepth(parent) + 1
+      else
+        depth = baseDepth + 1
+      end
+
+      depthCache[instance] = depth
+
+      return depth
+    end
+
+    for index = 1, total do
+      local desc = allDescendants[index]
+
+      if shouldSkip(desc) then
+        continue
+      end
+
+      promiseCount += 1
+
+      promises[promiseCount] = utility.createEmitPromise(effects, desc, getDepth(desc), function(scope)
+        emitters.dispatch(desc, scope, sharedUncMap, sharedRefMap, api_ref.caches.shared_part, legacyScale)
+      end)
     end
 
     return promises
