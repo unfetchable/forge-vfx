@@ -61,51 +61,117 @@ function effects.emit(depth: number, ...: Instance): types.EmitEnv
 
   local function queryAndEmitDescendants(obj: Instance, baseDepth: number): { any }
     local allDescendants = obj:QueryDescendants(EffectSelectors)
+    local total = #allDescendants
 
-    if #allDescendants == 0 then
+    if total == 0 then
       return {}
     end
 
     local nestedEffectHandlers = {}
 
-    for _, desc in allDescendants do
+    for index = 1, total do
+      local desc = allDescendants[index]
+
       if utility.shouldSkipNested(desc) then
         nestedEffectHandlers[desc] = true
       end
     end
 
     -- filter and emit valid effects
-    local promises = {}
+    local promises = table.create(total)
+    local promiseCount = 0
+    local skipCache = { [obj] = false }
+    local depthCache = { [obj] = baseDepth }
 
-    for _, desc in allDescendants do
-      local skipThis = false
-      local parent = desc.Parent
+    local function shouldSkip(instance: Instance): boolean
+      local cached = skipCache[instance]
 
-      while parent and parent ~= obj do
-        if nestedEffectHandlers[parent] then
-          skipThis = true
+      if cached ~= nil then
+        return cached
+      end
+
+      local current = instance.Parent
+      local skip = false
+      local visited = {}
+
+      while current and current ~= obj do
+        visited[current] = true
+        skip = nestedEffectHandlers[current] == true
+
+        if skip then
           break
         end
 
-        parent = parent.Parent
-      end
+        local cachedParentSkip = skipCache[current]
 
-      if not skipThis then
-        local p = desc.Parent
-        local effectDepth = baseDepth
-
-        while p and p ~= obj do
-          p = p.Parent
-          effectDepth += 1
+        if cachedParentSkip ~= nil then
+          skip = cachedParentSkip
+          break
         end
 
-        table.insert(
-          promises,
-          utility.createEmitPromise(effects, desc, effectDepth, function(scope)
-            emitters.dispatch(desc, scope, sharedUncMap, sharedRefMap, api_ref.caches.shared_part, legacyScale)
-          end)
-        )
+        current = current.Parent
       end
+
+      -- cache result for the queried instance as well
+      skipCache[instance] = skip
+
+      for inst in pairs(visited) do
+        skipCache[inst] = skip
+      end
+
+      return skip
+    end
+
+    local function getDepth(instance: Instance): number
+      local cached = depthCache[instance]
+
+      if cached then
+        return cached
+      end
+
+      local current = instance
+      local stack = {}
+
+      while current do
+        local cachedDepth = depthCache[current]
+
+        if cachedDepth then
+          break
+        end
+
+        table.insert(stack, current)
+
+        local parent = current.Parent
+
+        if parent and parent ~= obj then
+          current = parent
+        else
+          depthCache[current] = baseDepth + 1
+          break
+        end
+      end
+
+      for i = #stack, 1, -1 do
+        local child = stack[i]
+        local parentDepth = depthCache[child.Parent] or baseDepth
+        depthCache[child] = parentDepth + 1
+      end
+
+      return depthCache[instance]
+    end
+
+    for index = 1, total do
+      local desc = allDescendants[index]
+
+      if shouldSkip(desc) then
+        continue
+      end
+
+      promiseCount += 1
+
+      promises[promiseCount] = utility.createEmitPromise(effects, desc, getDepth(desc), function(scope)
+        emitters.dispatch(desc, scope, sharedUncMap, sharedRefMap, api_ref.caches.shared_part, legacyScale)
+      end)
     end
 
     return promises
