@@ -90,7 +90,7 @@ function effects.emit(depth: number, ...: Instance): types.EmitEnv
         return cached
       end
 
-      local current = instance
+      local current = instance.Parent
       local skip = false
       local visited = {}
 
@@ -111,6 +111,9 @@ function effects.emit(depth: number, ...: Instance): types.EmitEnv
 
         current = current.Parent
       end
+
+      -- cache result for the queried instance as well
+      skipCache[instance] = skip
 
       for inst in pairs(visited) do
         skipCache[inst] = skip
